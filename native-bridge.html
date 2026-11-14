@@ -1,0 +1,116 @@
+<script>
+/* ============ native bridge: GutAlarm (insistent notifications) ============ */
+(function () {
+  var st = { lastError: "", count: 0, at: 0, beeps: 0 };
+
+  function plugin() {
+    try { return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GutAlarm) || null; }
+    catch (e) { return null; }
+  }
+  function store() { try { return JSON.parse(localStorage.getItem("gutcare.v2")) || {}; } catch (e) { return {}; } }
+  function mode() { var s = store().settings || {}; return s.sound || "ten"; }
+
+  async function scheduleAll() {
+    var GA = plugin();
+    if (!GA) { st.lastError = "plugin not found"; return st; }
+    try {
+      try { await GA.requestPermission(); } catch (e) {}
+      var m = mode();
+      var items = [], id = 1, list = window.rhythm();
+      for (var i = 0; i < list.length; i++) {
+        var it = list[i];
+        var h = Math.floor(it.h), mi = Math.round((it.h % 1) * 60);
+        var title = window.t("alarm.title");
+        var body = window.itemTitle(it) + " · " + window.t("nat.tapstop");
+        if (m === "ten") {
+          for (var b = 0; b < 10; b++) {
+            items.push({ id: id++, hour: h, minute: mi, offsetSeconds: b * 4, title: title, body: body, mode: "ten" });
+          }
+        } else {
+          items.push({ id: id++, hour: h, minute: mi, offsetSeconds: 0, title: title, body: body, mode: m });
+        }
+      }
+      try { await GA.cancelAll(); } catch (e) {}
+      var r = await GA.schedule({ items: items });
+      st.count = (r && r.scheduled) ? r.scheduled : items.length;
+      st.beeps = m === "ten" ? 10 : m === "loop" ? -1 : 1;
+      st.at = Date.now();
+      st.lastError = "";
+      return st;
+    } catch (e) {
+      st.lastError = String((e && (e.message || e.errorMessage)) || e);
+      return st;
+    }
+  }
+
+  async function postNow() {
+    var GA = plugin();
+    if (!GA) return { ok: false, error: "plugin not found" };
+    try {
+      try { await GA.requestPermission(); } catch (e) {}
+      await GA.test({
+        title: window.t("notif.test.title"),
+        body: window.t("notif.test.body") + " · " + window.t("nat.tapstop"),
+        mode: mode() === "silent" ? "silent" : "loop"
+      });
+      return { ok: true };
+    } catch (e) {
+      return { ok: false, error: String((e && (e.message || e.errorMessage)) || e) };
+    }
+  }
+
+  window.gutcareNative = {
+    available: function () { return !!plugin(); },
+    state: function () { return st; },
+    schedule: scheduleAll,
+    test: postNow,
+    openHtml: async function (o) {
+      var GA = plugin();
+      if (!GA || !GA.openHtml) throw new Error("not available");
+      return GA.openHtml(o);
+    },
+    status: async function () {
+      var GA = plugin();
+      if (!GA) return { available: false, error: st.lastError || "plugin not found" };
+      try {
+        var s = await GA.status();
+        return {
+          available: true,
+          display: (s && s.enabled) ? "granted" : "denied",
+          pending: st.count, count: st.count, beeps: st.beeps, at: st.at,
+          error: st.lastError
+        };
+      } catch (e) {
+        return { available: true, error: String((e && e.message) || e) };
+      }
+    }
+  };
+
+  function stepsPlugin() {
+    try { return (window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.GutSteps) || null; }
+    catch (e) { return null; }
+  }
+  async function syncSteps() {
+    var p = stepsPlugin();
+    if (!p) return null;
+    try {
+      try { await p.start(); } catch (e) {}
+      var r = await p.today();
+      if (r && typeof r.steps === "number" && window.gutcareSetSteps) window.gutcareSetSteps(r.steps);
+      return r;
+    } catch (e) { return null; }
+  }
+  window.gutcareSteps = {
+    available: function () { return !!stepsPlugin(); },
+    sync: syncSteps,
+    enable: async function () { var p = stepsPlugin(); if (p && p.enable) { try { await p.enable(); } catch (e) {} } },
+    disable: async function () { var p = stepsPlugin(); if (p && p.disable) { try { await p.disable(); } catch (e) {} } }
+  };
+
+  function boot() { setTimeout(scheduleAll, 900); setTimeout(syncSteps, 1400); }
+  document.addEventListener("deviceready", boot, false);
+  window.addEventListener("load", boot);
+  document.addEventListener("visibilitychange", function () { if (!document.hidden) { scheduleAll(); syncSteps(); } });
+  setInterval(syncSteps, 60000);
+})();
+</script>
